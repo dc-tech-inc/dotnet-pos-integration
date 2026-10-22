@@ -21,6 +21,24 @@ public class SqlStockStoreTests(SqlFixture db) : IClassFixture<SqlFixture>
     }
 
     [SqlFact]
+    public async Task EnsureDatabase_creates_a_missing_database_and_is_a_no_op_afterwards()
+    {
+        var name = "pos_ensure_" + Guid.NewGuid().ToString("N")[..8];
+        var cs = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(db.ConnectionString) { InitialCatalog = name }.ConnectionString;
+        try
+        {
+            await SchemaMigrator.EnsureDatabaseAsync(cs, default);
+            await SchemaMigrator.EnsureDatabaseAsync(cs, default);
+            await SchemaMigrator.ApplyAsync(cs, default);
+        }
+        finally
+        {
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
+            await db.ExecuteAsync($"ALTER DATABASE [{name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{name}]");
+        }
+    }
+
+    [SqlFact]
     public async Task A_sale_reduces_stock_and_records_its_movements()
     {
         var store = await FreshStockAsync(("A", 10), ("B", 10));

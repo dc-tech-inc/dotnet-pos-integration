@@ -15,6 +15,9 @@ public sealed class WorkerOptions
     /// <summary>Load opening stock for the fake catalogue when the Stock table is empty.</summary>
     public bool SeedDemo { get; set; }
 
+    /// <summary>Create the database when it is missing. Meant for the compose demo; production databases are provisioned separately.</summary>
+    public bool EnsureDatabase { get; set; }
+
     public int SeedQuantity { get; set; } = 100;
 }
 
@@ -26,6 +29,7 @@ public sealed class SyncWorker(SyncService sync, Reconciler reconciler, SqlStock
         var o = options.Value;
         try
         {
+            if (o.EnsureDatabase) await SchemaMigrator.EnsureDatabaseAsync(db.ConnectionString, ct);
             await SchemaMigrator.ApplyAsync(db.ConnectionString, ct);
             if (o.SeedDemo && await store.CountStockAsync(ct) == 0)
             {

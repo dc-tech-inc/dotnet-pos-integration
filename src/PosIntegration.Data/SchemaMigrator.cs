@@ -23,6 +23,27 @@ public static partial class SchemaMigrator
         }
     }
 
+    /// <summary>Creates the database named in the connection string if it does not exist (demo and CI convenience; needs CREATE DATABASE rights).</summary>
+    public static async Task EnsureDatabaseAsync(string connectionString, CancellationToken ct)
+    {
+        var builder = new SqlConnectionStringBuilder(connectionString);
+        var name = builder.InitialCatalog;
+        if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("The connection string has no Database/Initial Catalog.");
+        builder.InitialCatalog = "master";
+
+        await using var conn = new SqlConnection(builder.ConnectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand("""
+            IF DB_ID(@name) IS NULL
+            BEGIN
+                DECLARE @sql nvarchar(max) = N'CREATE DATABASE ' + QUOTENAME(@name);
+                EXEC (@sql);
+            END
+            """, conn);
+        cmd.Parameters.AddWithValue("@name", name);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     /// <summary>GO is a client-tool separator, not T-SQL, so it has to be split here.</summary>
     public static IEnumerable<string> SplitBatches(string script) =>
         GoLine().Split(script).Select(b => b.Trim()).Where(b => b.Length > 0);
