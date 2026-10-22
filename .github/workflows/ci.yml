@@ -64,7 +64,7 @@ jobs:
           {
             echo '### Tests'
             echo '```'
-            grep -E '^(Passed|Failed)!' test.txt
+            grep -E '^(Test Run|Total tests|\s+(Passed|Failed|Skipped):)' test.txt
             echo '```'
             echo '### Line coverage (coverlet, all projects under test)'
             for f in coverage/*/coverage.cobertura.xml; do
