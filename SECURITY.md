@@ -4,7 +4,7 @@ This repository is a reference implementation with synthetic data. It is not dep
 
 ## Reporting a vulnerability
 
-Please do not open a public issue. Use GitHub's private vulnerability reporting: **Security → Report a vulnerability** on this repository. If that is unavailable, contact DCtech. through https://dctech.live.
+Do not open a public issue. Use GitHub's private vulnerability reporting: **Security → Report a vulnerability** on this repository. If that is unavailable, contact DCtech. through https://dctech.live.
 
 Include what you found, how to reproduce it, and the affected commit. You can expect an acknowledgement within a few business days.
 
