@@ -1,0 +1,32 @@
+using System.Reflection;
+using System.Text.RegularExpressions;
+using Microsoft.Data.SqlClient;
+
+namespace DcTech.PosIntegration.Data;
+
+public static partial class SchemaMigrator
+{
+    /// <summary>Applies the embedded schema.sql. Safe to run on every start: every statement checks before it creates.</summary>
+    public static async Task ApplyAsync(string connectionString, CancellationToken ct)
+    {
+        await using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema.sql")
+            ?? throw new InvalidOperationException("schema.sql is not embedded");
+        using var reader = new StreamReader(stream);
+        var script = await reader.ReadToEndAsync(ct);
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        foreach (var batch in SplitBatches(script))
+        {
+            await using var cmd = new SqlCommand(batch, conn);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>GO is a client-tool separator, not T-SQL, so it has to be split here.</summary>
+    public static IEnumerable<string> SplitBatches(string script) =>
+        GoLine().Split(script).Select(b => b.Trim()).Where(b => b.Length > 0);
+
+    [GeneratedRegex(@"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    private static partial Regex GoLine();
+}
