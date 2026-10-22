@@ -33,7 +33,7 @@ Sync: 200 applied, 12 duplicate, 0 rejected, 26 unit(s) short
 Reconciliation clean
 ```
 
-(The numbers above are from a run against SQL Server LocalDB on the author's machine; CI runs the same stack in the `compose-smoke` job and fails unless the worker exits 0.) With `WORKER_RUN_ONCE=true` the worker exits after one pass: `0` = clean, `2` = reconciliation found differences.
+(The same numbers appear in the CI `compose-smoke` job, which fails unless the worker exits 0.) With `WORKER_RUN_ONCE=true` the worker exits after one pass: `0` = clean, `2` = reconciliation found differences.
 
 Without Docker, with any SQL Server you can reach and the .NET 10 SDK:
 
@@ -117,7 +117,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and every push to `ma
 
 CodeQL (`codeql.yml`) is configured for C# and Actions; it runs once the repository is public (it is skipped while the repository is private on a Free plan).
 
-Counts are written after the first green run, from CI output, not from a local machine.
+Measured by CI on the pull request (run 39811222891): **36 xUnit tests passed, 0 skipped** (25 without a database, 11 against SQL Server 2022, including the concurrency and end-to-end tests) and **13 Pester tests passed**. The compose smoke job logged `Sync: 200 applied, 12 duplicate, 0 rejected, 26 unit(s) short` and `Reconciliation clean`.
 
 ## Decisions
 
