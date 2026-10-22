@@ -58,7 +58,7 @@ jobs:
           dotnet test --no-build -c Release --collect:"XPlat Code Coverage" --results-directory coverage \
             --logger "console;verbosity=normal" | tee test.txt
       - name: Every test ran (no integration test may be skipped in CI)
-        run: grep -Eq 'Skipped:\s+0,' test.txt
+        run: grep -q 'Test Run Successful' test.txt && ! grep -Eq '^\s+Skipped:' test.txt
       - name: Summary
         run: |
           {

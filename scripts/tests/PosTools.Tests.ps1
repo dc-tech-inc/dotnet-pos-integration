@@ -1,6 +1,6 @@
 BeforeAll {
     Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'PosTools.psm1') -Force
-    function New-Csv([string]$Body) {
+    function Get-TestCsvPath([string]$Body) {
         $p = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.csv')
         Set-Content -LiteralPath $p -Value $Body -Encoding UTF8
         $p
@@ -9,14 +9,14 @@ BeforeAll {
 
 Describe 'Read-StockCsv' {
     It 'reads valid rows and normalises SKUs to upper case' {
-        $rows = Read-StockCsv -Path (New-Csv "Sku,Quantity`nsku-0001,5`nSKU-0002, 7 ")
+        $rows = Read-StockCsv -Path (Get-TestCsvPath "Sku,Quantity`nsku-0001,5`nSKU-0002, 7 ")
         $rows.Count | Should -Be 2
         $rows[0].Sku | Should -Be 'SKU-0001'
         $rows[1].Quantity | Should -Be 7
     }
 
     It 'lists every bad row in one error' {
-        $path = New-Csv "Sku,Quantity`nSKU-1,abc`nBAD SKU,1`nSKU-2,-4`nSKU-3,2`nSKU-3,9"
+        $path = Get-TestCsvPath "Sku,Quantity`nSKU-1,abc`nBAD SKU,1`nSKU-2,-4`nSKU-3,2`nSKU-3,9"
         $err = { Read-StockCsv -Path $path } | Should -Throw -PassThru
         $err.Exception.Message | Should -Match "line 2: quantity 'abc'"
         $err.Exception.Message | Should -Match "line 3: invalid SKU 'BAD SKU'"
@@ -25,16 +25,16 @@ Describe 'Read-StockCsv' {
     }
 
     It 'rejects SQL metacharacters in a SKU' {
-        { Read-StockCsv -Path (New-Csv "Sku,Quantity`n`"X'');DROP TABLE dbo.Stock;--`",1") } | Should -Throw '*invalid SKU*'
+        { Read-StockCsv -Path (Get-TestCsvPath "Sku,Quantity`n`"X'');DROP TABLE dbo.Stock;--`",1") } | Should -Throw '*invalid SKU*'
     }
 
     It 'fails on a missing file and on an empty file' {
         { Read-StockCsv -Path (Join-Path $TestDrive 'nope.csv') } | Should -Throw '*File not found*'
-        { Read-StockCsv -Path (New-Csv "Sku,Quantity") } | Should -Throw '*No rows*'
+        { Read-StockCsv -Path (Get-TestCsvPath "Sku,Quantity") } | Should -Throw '*No rows*'
     }
 
     It 'fails when a column is missing' {
-        { Read-StockCsv -Path (New-Csv "Sku`nSKU-1") } | Should -Throw '*quantity*'
+        { Read-StockCsv -Path (Get-TestCsvPath "Sku`nSKU-1") } | Should -Throw '*quantity*'
     }
 }
 
@@ -42,7 +42,7 @@ Describe 'Import-PosStock' {
     BeforeEach { Mock Invoke-PosSql { } -ModuleName PosTools }
 
     It 'sends one transactional MERGE with every row' {
-        $r = Import-PosStock -Path (New-Csv "Sku,Quantity`nA-1,3`nB-2,4") -ConnectionString 'x'
+        $r = Import-PosStock -Path (Get-TestCsvPath "Sku,Quantity`nA-1,3`nB-2,4") -ConnectionString 'x'
         $r.Imported | Should -Be 2
         Should -Invoke Invoke-PosSql -ModuleName PosTools -Exactly 1 -ParameterFilter {
             $Query -match "MERGE dbo.Stock" -and $Query -match "\('A-1',3\),\('B-2',4\)" -and $Query -match 'BEGIN TRANSACTION'
@@ -50,12 +50,12 @@ Describe 'Import-PosStock' {
     }
 
     It 'does not touch the database with -WhatIf' {
-        Import-PosStock -Path (New-Csv "Sku,Quantity`nA-1,3") -ConnectionString 'x' -WhatIf | Out-Null
+        Import-PosStock -Path (Get-TestCsvPath "Sku,Quantity`nA-1,3") -ConnectionString 'x' -WhatIf | Out-Null
         Should -Invoke Invoke-PosSql -ModuleName PosTools -Exactly 0
     }
 
     It 'does not touch the database when the file is invalid' {
-        { Import-PosStock -Path (New-Csv "Sku,Quantity`nA-1,oops") -ConnectionString 'x' } | Should -Throw
+        { Import-PosStock -Path (Get-TestCsvPath "Sku,Quantity`nA-1,oops") -ConnectionString 'x' } | Should -Throw
         Should -Invoke Invoke-PosSql -ModuleName PosTools -Exactly 0
     }
 }
