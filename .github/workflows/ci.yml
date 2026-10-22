@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+  PESTER_VERSION: 5.7.1
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  # Build, format, unit tests and the SQL Server integration tests (a real mssql service container).
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          # Throwaway password for an ephemeral CI container.
+          MSSQL_SA_PASSWORD: Ci_Only_Passw0rd!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 15s
+
+    env:
+      POS_TEST_SQL: Server=localhost,1433;User Id=sa;Password=Ci_Only_Passw0rd!;TrustServerCertificate=True
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - run: dotnet restore
+      - name: Format check
+        run: dotnet format --verify-no-changes --no-restore
+      - name: Build (warnings are errors)
+        run: dotnet build --no-restore -c Release -warnaserror
+      - name: Tests with coverage
+        run: |
+          set -o pipefail
+          dotnet test --no-build -c Release --collect:"XPlat Code Coverage" --results-directory coverage \
+            --logger "console;verbosity=normal" | tee test.txt
+      - name: Every test ran (no integration test may be skipped in CI)
+        run: grep -q 'Test Run Successful' test.txt && ! grep -Eq '^\s+Skipped:' test.txt
+      - name: Summary
+        run: |
+          {
+            echo '### Tests'
+            echo '```'
+            grep -E '^(Test Run|Total tests|\s+(Passed|Failed|Skipped):)' test.txt
+            echo '```'
+            echo '### Line coverage (coverlet, all projects under test)'
+            for f in coverage/*/coverage.cobertura.xml; do
+              awk -F'"' '/<coverage /{for(i=1;i<NF;i++) if($i ~ /line-rate=/) printf "%.1f%%\n", $(i+1)*100}' "$f"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish worker and fake POS (release build must work)
+        run: |
+          dotnet publish src/PosIntegration.Worker -c Release --no-build -o /tmp/worker
+          dotnet publish src/PosIntegration.FakePos -c Release --no-build -o /tmp/fakepos
+
+  powershell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Pester and PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $issues = Invoke-ScriptAnalyzer -Path ./scripts -Recurse -Severity Warning, Error
+          $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize
+          if ($issues) { exit 1 }
+      - name: Pester
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion $env:PESTER_VERSION
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = './scripts/tests'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg
+
+  # docker compose up: SQL Server + fake POS (with 503s and redelivery) + worker. The worker exits 0 only if reconciliation is clean.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^WORKER_RUN_ONCE=.*/WORKER_RUN_ONCE=true/' .env
+      - name: Up (exit code follows the worker)
+        run: docker compose up --build --exit-code-from worker
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Down
+        if: always()
+        run: docker compose down -v
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # scan the full history
+      - name: Install gitleaks (sha256 verified)
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "$base/$tarball"
+          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " $tarball\$" | sha256sum -c -
+          tar -xzf "$tarball" gitleaks
+      - run: ./gitleaks git --redact --verbose .
