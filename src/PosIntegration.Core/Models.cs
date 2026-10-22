@@ -3,8 +3,12 @@ namespace DcTech.PosIntegration;
 /// <summary>One line of a sale: a SKU and how many units left the shelf.</summary>
 public sealed record SaleLine(string Sku, int Quantity);
 
+/// <summary>A launch guard that a supervisor released for this sale. It travels with the sale so the back office keeps the audit trail.</summary>
+public sealed record SaleOverride(string Guard, string Code, string SupervisorId);
+
 /// <summary>A sale reported by the (fictional) point of sale. <see cref="Seq"/> is the POS's own monotonic sequence.</summary>
-public sealed record Sale(string SaleId, long Seq, string StoreId, DateTimeOffset OccurredAt, IReadOnlyList<SaleLine> Lines);
+public sealed record Sale(string SaleId, long Seq, string StoreId, DateTimeOffset OccurredAt, IReadOnlyList<SaleLine> Lines,
+    IReadOnlyList<SaleOverride>? Overrides = null);
 
 public sealed record SalesPage(IReadOnlyList<Sale> Sales);
 

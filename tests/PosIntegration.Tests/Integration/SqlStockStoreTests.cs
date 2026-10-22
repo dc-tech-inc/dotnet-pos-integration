@@ -7,7 +7,7 @@ public class SqlStockStoreTests(SqlFixture db) : IClassFixture<SqlFixture>
 {
     private async Task<SqlStockStore> FreshStockAsync(params (string Sku, int Qty)[] stock)
     {
-        await db.ExecuteAsync("DELETE dbo.StockMovement; DELETE dbo.ProcessedSale; DELETE dbo.Stock; UPDATE dbo.SyncCursor SET LastSeq = 0");
+        await db.ExecuteAsync("DELETE dbo.StockMovement; DELETE dbo.SaleOverride; DELETE dbo.ProcessedSale; DELETE dbo.Stock; UPDATE dbo.SyncCursor SET LastSeq = 0");
         var store = db.Store;
         await store.UpsertOpeningStockAsync(stock, default);
         return store;
@@ -63,6 +63,21 @@ public class SqlStockStoreTests(SqlFixture db) : IClassFixture<SqlFixture>
         Assert.Equal(ApplyOutcome.Applied, first.Outcome);
         Assert.Equal(ApplyOutcome.Duplicate, second.Outcome);
         Assert.Equal(6, await db.ScalarAsync<int>("SELECT OnHand FROM dbo.Stock WHERE Sku = 'A'"));
+    }
+
+    [SqlFact]
+    public async Task Supervisor_overrides_are_stored_with_the_sale_and_once_only()
+    {
+        var store = await FreshStockAsync(("A", 10));
+        var sale = Sale(1, ("A", 1)) with
+        {
+            Overrides = [new("item", "item-keyed", "SUP-01"), new("item", "item-keyed", "SUP-01"), new("repeat", "repeat-basket", "SUP-01")],
+        };
+
+        await store.ApplySaleAsync(sale, default);
+        await store.ApplySaleAsync(sale, default);
+
+        Assert.Equal(2, await db.ScalarAsync<int>("SELECT COUNT(*) FROM dbo.SaleOverride WHERE SaleId = 'S-000001' AND SupervisorId = 'SUP-01'"));
     }
 
     [SqlFact]

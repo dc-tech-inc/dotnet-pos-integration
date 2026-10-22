@@ -22,6 +22,8 @@ services:
       FakePos__Total: ${FAKEPOS_TOTAL:-200}
       FakePos__FailureEvery: ${FAKEPOS_FAILURE_EVERY:-7}
       FakePos__Redeliver: ${FAKEPOS_REDELIVER:-3}
+      LaunchGuards__Default__RequireScan: ${FAKEPOS_REQUIRE_SCAN:-false}
+      LaunchGuards__Default__RepeatWindowSeconds: ${FAKEPOS_REPEAT_WINDOW_SECONDS:-30}
     ports:
       - "127.0.0.1:5080:5080"
 

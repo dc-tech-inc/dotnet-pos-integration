@@ -28,6 +28,12 @@ public sealed class SqlStockStore(string connectionString) : IStockStore
             return new ApplyResult(ApplyOutcome.Duplicate, 0);
         }
 
+        // One row per overridden code; the same code on two lines (two keyed items, say) is one override.
+        foreach (var o in (sale.Overrides ?? []).DistinctBy(o => o.Code))
+            await conn.ExecuteAsync(new CommandDefinition(
+                "INSERT dbo.SaleOverride (SaleId, Guard, Code, SupervisorId) VALUES (@SaleId, @Guard, @Code, @SupervisorId)",
+                new { sale.SaleId, o.Guard, o.Code, o.SupervisorId }, tx, cancellationToken: ct));
+
         var shortfall = 0;
         // Sorted by SKU so two concurrent sales always take row locks in the same order.
         foreach (var line in SaleValidator.Normalize(sale.Lines))

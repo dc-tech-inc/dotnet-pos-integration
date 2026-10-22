@@ -52,3 +52,14 @@ GO
 IF NOT EXISTS (SELECT 1 FROM dbo.SyncCursor)
 INSERT dbo.SyncCursor (Id, LastSeq) VALUES (1, 0);
 GO
+
+-- Launch guards a supervisor released at the terminal (see ADR 6). Written in the same transaction as the sale, so a duplicate delivery adds nothing.
+IF OBJECT_ID(N'dbo.SaleOverride', N'U') IS NULL
+CREATE TABLE dbo.SaleOverride (
+    SaleId       varchar(64) NOT NULL CONSTRAINT FK_SaleOverride_Sale REFERENCES dbo.ProcessedSale (SaleId),
+    Guard        varchar(32) NOT NULL,
+    Code         varchar(64) NOT NULL,
+    SupervisorId varchar(32) NOT NULL,
+    CONSTRAINT PK_SaleOverride PRIMARY KEY (SaleId, Code)
+);
+GO

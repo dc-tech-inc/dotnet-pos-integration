@@ -14,7 +14,8 @@ A POS reports sales; a back-office database owns stock. The link between them is
 - the POS delivers at least once, so the same sale can arrive twice;
 - the POS fails (503, timeouts) in the middle of a page;
 - a sale can ask for more than the shelf holds, or for an item the stock system has never heard of;
-- weeks later nobody can say whether the two systems still agree.
+- weeks later nobody can say whether the two systems still agree;
+- an operator rings up a wrong sale (the same basket twice, a typed code, 100 instead of 10), and once the POS has committed it no back-office check can undo it.
 
 This repository shows one way to handle each of those, with a test for every claim.
 
@@ -49,9 +50,18 @@ dotnet run --project src/PosIntegration.Worker
 
 ## Architecture
 
+A sale starts at a terminal of the fictional POS. The terminal reads its simulated devices (cash session, drawer sensor, keylock, scanner or keyboard entry) and runs the launch guards before the sale exists. A blocked attempt stays in the terminal journal and never reaches the feed. A block that a supervisor may release needs a configured supervisor id and the keylock in the Supervisor position; the released codes travel with the sale. From there every sale takes the same path: the worker pulls the feed, books each sale once (idempotency by sale id), writes stock, movements and any overrides in one SQL Server transaction, and reconciles against the POS totals.
+
 ```mermaid
 flowchart LR
   subgraph POS["Fictional POS (PosIntegration.FakePos)"]
+    subgraph TERM["Simulated terminal, no hardware"]
+      DEV["Devices<br/>session, drawer sensor,<br/>keylock, scan or keyed entry"]
+      A["POST /terminals/{id}/sales<br/>SaleAttempt"]
+      G{"LaunchGuardPipeline<br/>session, drawer, keylock,<br/>item, quantity, repeat"}
+      OV["Supervisor override<br/>known id + keylock Supervisor"]
+      J[("Terminal journal<br/>GET /terminals/{id}/journal")]
+    end
     S["GET /sales?after=&limit="]
     T["GET /sales/summary?upTo="]
   end
@@ -65,12 +75,20 @@ flowchart LR
     ST[("Stock<br/>CHECK OnHand >= 0")]
     SM[("StockMovement<br/>Quantity / Applied / Shortfall")]
     CU[("SyncCursor")]
+    SO[("SaleOverride<br/>who released which block")]
   end
+  DEV --> G
+  A --> G
+  G -->|"every attempt, with reasons"| J
+  G -->|"overridable blocks only"| OV
+  G -->|"no block: posted"| S
+  OV -->|"released: Overrides on the sale"| S
   S --> R --> SY
   SY -->|"one transaction per sale"| PS
   SY --> ST
   SY --> SM
   SY --> CU
+  SY -->|"same transaction"| SO
   T --> RC
   RC -->|"POS totals vs booked totals"| SM
   RC -->|"OnHand = Opening - SUM(Applied)"| ST
@@ -78,10 +96,10 @@ flowchart LR
 
 | Project | What it is |
 |---|---|
-| `src/PosIntegration.Core` | Domain and logic with no I/O: `SyncService`, `RetryPolicy`, `Reconciler`, `SaleValidator`, and the two ports `ISaleSource` / `IStockStore` |
+| `src/PosIntegration.Core` | Domain and logic with no I/O: `SyncService`, `RetryPolicy`, `Reconciler`, `SaleValidator`, `LaunchGuardPipeline` with its `ISaleGuard`s, and the two ports `ISaleSource` / `IStockStore` |
 | `src/PosIntegration.Data` | `SqlStockStore` (Dapper + SqlClient), the idempotent `schema.sql`, `SchemaMigrator` |
 | `src/PosIntegration.Worker` | The host: HTTP source, retry classification, polling loop, options from environment |
-| `src/PosIntegration.FakePos` | The fictional POS: deterministic sales, injectable 503s and redelivery |
+| `src/PosIntegration.FakePos` | The fictional POS: deterministic sales, injectable 503s and redelivery, and simulated terminals that run the launch guards |
 | `scripts/` | PowerShell module `PosTools` plus `Import-Stock.ps1`, `Export-Stock.ps1`, `Test-Health.ps1` |
 | `tests/` | xUnit: unit tests, SQL Server integration tests, an end-to-end test; Pester tests live in `scripts/tests` |
 
@@ -92,6 +110,31 @@ flowchart LR
 - **Transient failures are retried, permanent ones are not.** Exponential backoff with jitter; 5xx/408/429, SQL deadlocks and timeouts retry, 4xx does not. ([ADR 4](docs/adr/0004-pull-with-a-cursor-and-retry.md))
 - **Both sides are compared.** Reconciliation asks the POS for per-SKU totals up to the highest booked sequence and compares them with the movements, then checks `Opening - OnHand = SUM(Applied)` per SKU. A rejected (invalid) sale shows up as a mismatch; stock edited behind the ledger shows up as drift.
 - **The cursor never moves backwards**, even if two workers race, and a redelivered page does not move it at all.
+- **A wrong sale is stopped before it exists.** Launch guards at the terminal block an open drawer, a missing session, a locked keylock, unknown or typed codes, unconfirmed or oversized quantities and a repeated basket. A supervisor override is stored with the sale in `dbo.SaleOverride`. ([ADR 6](docs/adr/0006-launch-guards-at-the-terminal.md))
+
+## Launch guards (interlocks)
+
+The terminal, its devices and the supervisor key are simulated through the fake POS API; nothing here reads real hardware. Defaults are in `src/PosIntegration.FakePos/appsettings.json` under `LaunchGuards:Default`, and `LaunchGuards:Terminals:{id}` changes them for one terminal (`T-02` requires the scanner). Any key can also be set from the environment, for example `LaunchGuards__Default__RequireScan=true` (see `.env.example`).
+
+| Guard | What it stops | Setting | Limitation |
+|---|---|---|---|
+| `session` | A sale with no open cash session, or by an operator other than the one who opened it | `RequireOpenSession` | Session state lives in memory in the fake |
+| `drawer` | The next sale while the drawer is open; a posted sale kicks the drawer open | `RequireDrawerClosed` | The drawer sensor is an API call (`PUT /terminals/{id}/drawer`) |
+| `keylock` | Any sale with the keylock Locked; with `Supervisor`, any sale without the supervisor key | `RequiredKeylock`: `Normal` or `Supervisor` | The keylock is an API call (`PUT /terminals/{id}/keylock`) |
+| `item` | A code that is not in the item file; a typed line when scanning is required (a supervisor can release the typed line) | `RequireKnownItem`, `RequireScan` | The item file is the fake's fixed catalogue |
+| `quantity` | A line above the confirmation threshold that the operator did not confirm; a line above the limit, without a supervisor | `ConfirmQuantityAbove`, `SupervisorQuantityAbove` | The thresholds are configuration, not a standard |
+| `repeat` | The same basket as the previous sale on that terminal inside the window (a supervisor can release it) | `RepeatWindowSeconds` | Compares with the previous sale only |
+
+```sh
+curl -X POST localhost:5080/terminals/T-01/session -H 'Content-Type: application/json' -d '{"operatorId":"OP-01"}'
+curl -X POST localhost:5080/terminals/T-01/sales -H 'Content-Type: application/json' \
+  -d '{"operatorId":"OP-01","lines":[{"sku":"SKU-0001","quantity":2}]}'   # 201, and the drawer is now open
+curl -X POST localhost:5080/terminals/T-01/sales -H 'Content-Type: application/json' \
+  -d '{"operatorId":"OP-01","lines":[{"sku":"SKU-0002","quantity":1}]}'   # 409 drawer-open
+curl localhost:5080/terminals/T-01/journal
+```
+
+An override is the same request with `"supervisorId":"SUP-01"` after `PUT /terminals/{id}/keylock` with `{"position":"Supervisor"}`. It releases only the blocks marked as releasable above; an open drawer or an unknown code stays blocked.
 
 ## PowerShell tooling
 
@@ -117,11 +160,11 @@ CI (`.github/workflows/ci.yml`) runs on every pull request and every push to `ma
 
 CodeQL (`codeql.yml`) is configured for C# and Actions; it runs once the repository is public (it is skipped while the repository is private on a Free plan).
 
-Measured by CI on the pull request (run 39811222891): **36 xUnit tests passed, 0 skipped** (24 without a database, 12 against SQL Server 2022, including the concurrency and end-to-end tests) and **13 Pester tests passed**. The compose smoke job logged `Sync: 200 applied, 12 duplicate, 0 rejected, 26 unit(s) short` and `Reconciliation clean`.
+Measured by CI on the pull request (run 39847175924): **56 xUnit tests passed, 0 skipped** (42 without a database, 14 against SQL Server 2022, including the concurrency and end-to-end tests; 18 of the 42 cover the launch guards and the simulated terminal, 2 of the 14 the stored overrides) and **13 Pester tests passed**. The compose smoke job logged `Sync: 200 applied, 12 duplicate, 0 rejected, 26 unit(s) short` and `Reconciliation clean`.
 
 ## Decisions
 
-[ADR 1 idempotency in the database](docs/adr/0001-idempotency-in-the-database.md) · [2 shortfall instead of negative stock](docs/adr/0002-shortfall-instead-of-negative-stock.md) · [3 Dapper and plain SQL](docs/adr/0003-dapper-and-plain-sql.md) · [4 cursor and retry](docs/adr/0004-pull-with-a-cursor-and-retry.md) · [5 PowerShell with a mockable SQL seam](docs/adr/0005-powershell-tooling-with-a-mockable-sql-seam.md)
+[ADR 1 idempotency in the database](docs/adr/0001-idempotency-in-the-database.md) · [2 shortfall instead of negative stock](docs/adr/0002-shortfall-instead-of-negative-stock.md) · [3 Dapper and plain SQL](docs/adr/0003-dapper-and-plain-sql.md) · [4 cursor and retry](docs/adr/0004-pull-with-a-cursor-and-retry.md) · [5 PowerShell with a mockable SQL seam](docs/adr/0005-powershell-tooling-with-a-mockable-sql-seam.md) · [6 launch guards at the terminal](docs/adr/0006-launch-guards-at-the-terminal.md)
 
 ## Limitations
 
@@ -132,6 +175,7 @@ Measured by CI on the pull request (run 39811222891): **36 xUnit tests passed, 0
 - **Demo security.** The fake POS is unauthenticated and the compose stack uses the `sa` login with a self-signed certificate. Do not copy that.
 - **PowerShell is not tested against a live database**; the SQL it generates is the same `MERGE` the C# integration test covers, and the wrapper function is mocked in Pester.
 - **No metrics or tracing.** Logs only.
+- **Simulated devices only.** Drawer, keylock, scanner and cash session are API calls on the fake POS, not OPOS, JavaPOS or Windows.Devices.PointOfService drivers. The terminal journal is in memory and lost on restart; only overrides reach SQL Server, not blocked attempts.
 - **Tested against SQL Server 2022 in CI.** Other versions are untested.
 
 ## Roadmap
@@ -140,9 +184,11 @@ See the open issues: schema migrations with a versioned history, returns and voi
 
 ## Português (resumo)
 
-Integração PDV → estoque em C#/.NET 10 e SQL Server pela DCtech.: um worker lê vendas de um PDV **fictício**, baixa o estoque uma única vez (a chave primária do id da venda garante a idempotência na mesma transação), nunca deixa o saldo negativo (a diferença vira *shortfall* registrado), repete falhas transitórias com backoff e, no fim, reconcilia os totais do PDV com o que foi lançado. Scripts PowerShell (importar/exportar estoque e health check) têm testes Pester. Tudo é dado sintético; `docker compose up` sobe o conjunto.
+Integração PDV → estoque em C#/.NET 10 e SQL Server pela DCtech.: um worker lê vendas de um PDV **fictício**, baixa o estoque uma única vez (a chave primária do id da venda garante a idempotência na mesma transação), nunca deixa o saldo negativo (a diferença vira *shortfall* registrado), repete falhas transitórias com backoff e, no fim, reconcilia os totais do PDV com o que foi lançado. Scripts PowerShell (importar/exportar estoque e health check) têm testes Pester. Travas de lançamento nos terminais simulados do PDV bloqueiam a venda antes de ela existir (gaveta aberta, caixa sem sessão, chave em Locked, código desconhecido ou digitado, quantidade sem confirmação ou acima do limite, mesma cesta repetida); o override de supervisor exige a chave na posição Supervisor e fica registrado em `dbo.SaleOverride`. Os dispositivos são simulados, sem hardware. Tudo é dado sintético; `docker compose up` sobe o conjunto.
 
 ## Sources
+
+Launch guards (ADR 6): [OMG UnifiedPOS](https://www.omg.org/spec/UPOS/), [POS for .NET `Keylock`](https://learn.microsoft.com/previous-versions/windows/embedded/ms884534(v=winembedded.1002)), [Windows.Devices.PointOfService `CashDrawer`](https://learn.microsoft.com/uwp/api/windows.devices.pointofservice.cashdrawer) and [`BarcodeScanner`](https://learn.microsoft.com/uwp/api/windows.devices.pointofservice.barcodescanner), [Oracle Simphony cash drawer options](https://docs.oracle.com/en/industries/food-beverage/simphony/simcg/t_peripherals_cash_drawer.htm).
 
 Design choices follow the official documentation: [.NET support policy](https://dotnet.microsoft.com/platform/support/policy) (.NET 10 is LTS), [SQL Server Linux container quickstart](https://learn.microsoft.com/sql/linux/quickstart-install-connect-docker) (`2022-latest` image, `MSSQL_SA_PASSWORD`, `mssql-tools18`), [Microsoft.Data.SqlClient](https://learn.microsoft.com/sql/connect/ado-net/microsoft-ado-net-sql-server), [Dapper](https://github.com/DapperLib/Dapper), [xUnit](https://xunit.net/docs/getting-started/v2/getting-started), [Pester](https://pester.dev/docs/quick-start) and [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview).
 

@@ -14,9 +14,14 @@ public sealed class FakePosOptions
     public int Seed { get; set; } = 42;
 }
 
-/// <summary>Deterministic sales for a fictional store: the same seed and sequence always give the same sale.</summary>
+/// <summary>
+/// Deterministic sales for a fictional store: the same seed and sequence always give the same sale.
+/// Sales posted through a simulated terminal are appended after the generated ones (Seq = Total + 1, + 2, ...).
+/// </summary>
 public sealed class PosGenerator(FakePosOptions options)
 {
+    private readonly List<Sale> _launched = [];
+
     public const int CatalogSize = 10;
 
     /// <summary>SKU-0001 .. SKU-0010. Opening stock for these is what the demo seed loads.</summary>
@@ -36,16 +41,39 @@ public sealed class PosGenerator(FakePosOptions options)
         return new Sale($"S-{seq:D6}", seq, "STORE-01", Epoch.AddMinutes(seq), lines);
     }
 
+    /// <summary>Adds a sale that a terminal let through and gives it the next sequence.</summary>
+    public Sale Append(IReadOnlyList<SaleLine> lines, DateTimeOffset at, IReadOnlyList<SaleOverride> overrides)
+    {
+        lock (_launched)
+        {
+            var seq = options.Total + _launched.Count + 1L;
+            var sale = new Sale($"S-{seq:D6}", seq, "STORE-01", at, lines, overrides.Count == 0 ? null : overrides);
+            _launched.Add(sale);
+            return sale;
+        }
+    }
+
+    private long LastSeq
+    {
+        get { lock (_launched) return options.Total + _launched.Count; }
+    }
+
+    private Sale Get(long seq)
+    {
+        if (seq <= options.Total) return Create(seq);
+        lock (_launched) return _launched[(int)(seq - options.Total - 1)];
+    }
+
     public IReadOnlyList<Sale> Page(long afterSeq, int limit)
     {
         var first = Math.Max(1, afterSeq + 1 - options.Redeliver);
-        var last = Math.Min(options.Total, afterSeq + limit);
-        return first > last ? [] : Enumerable.Range((int)first, (int)(last - first + 1)).Select(s => Create(s)).ToList();
+        var last = Math.Min(LastSeq, afterSeq + limit);
+        return first > last ? [] : Enumerable.Range((int)first, (int)(last - first + 1)).Select(s => Get(s)).ToList();
     }
 
     public IReadOnlyDictionary<string, int> Summary(long upToSeq) =>
-        Enumerable.Range(1, (int)Math.Min(upToSeq, options.Total))
-            .SelectMany(s => Create(s).Lines)
+        Enumerable.Range(1, (int)Math.Min(upToSeq, LastSeq))
+            .SelectMany(s => Get(s).Lines)
             .GroupBy(l => l.Sku)
             .ToDictionary(g => g.Key, g => g.Sum(l => l.Quantity));
 }
