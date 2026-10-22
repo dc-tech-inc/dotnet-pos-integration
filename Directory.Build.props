@@ -4,6 +4,5 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 </Project>

@@ -1,0 +1,40 @@
+name: dotnet-pos-integration
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?copy .env.example to .env first}
+    ports:
+      - "127.0.0.1:1433:1433"
+    healthcheck:
+      # mssql-tools18 ships in the 2022 image; -C trusts the container's self-signed certificate.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  fakepos:
+    build: { context: ., target: fakepos }
+    environment:
+      FakePos__Total: ${FAKEPOS_TOTAL:-200}
+      FakePos__FailureEvery: ${FAKEPOS_FAILURE_EVERY:-7}
+      FakePos__Redeliver: ${FAKEPOS_REDELIVER:-3}
+    ports:
+      - "127.0.0.1:5080:5080"
+
+  worker:
+    build: { context: ., target: worker }
+    depends_on:
+      mssql: { condition: service_healthy }
+      fakepos: { condition: service_started }
+    environment:
+      Worker__SqlConnection: Server=mssql;Database=pos;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True
+      Worker__PosApiUrl: http://fakepos:5080
+      Worker__EnsureDatabase: "true"
+      Worker__SeedDemo: "true"
+      Worker__RunOnce: ${WORKER_RUN_ONCE:-false}
+      Worker__PollIntervalSeconds: "5"
+    restart: "no"
