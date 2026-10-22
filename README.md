@@ -3,16 +3,16 @@
 [![CI](https://github.com/dc-tech-inc/dotnet-pos-integration/actions/workflows/ci.yml/badge.svg)](https://github.com/dc-tech-inc/dotnet-pos-integration/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A point-of-sale to stock integration in **C# / .NET 10 and SQL Server**: a worker pulls sales from a POS, takes them out of inventory **exactly once**, survives a flaky POS, and proves at the end that both sides agree. Operator tooling is **PowerShell** with Pester tests. One `docker compose up` runs the whole thing.
+A point-of-sale to stock integration in C# / .NET 10 and SQL Server: a worker pulls sales from a POS, takes them out of inventory exactly once, survives a flaky POS, and proves at the end that both sides agree. Operator tooling is PowerShell with Pester tests. One `docker compose up` runs the whole thing.
 
-Built and maintained by **DCtech.** as an engineering reference. The POS is **fictional** (`PosIntegration.FakePos`), every SKU and sale is generated, and nothing here is derived from a real POS product, a client or an employer's system.
+Built and maintained by DCtech. as an engineering reference. The POS is **fictional** (`PosIntegration.FakePos`), every SKU and sale is generated, and nothing here is derived from a real POS product, a client or an employer's system.
 
 ## The problem
 
 A POS reports sales; a back-office database owns stock. The link between them is where stock goes wrong:
 
-- the POS delivers **at least once**, so the same sale can arrive twice;
-- the POS **fails** (503, timeouts) in the middle of a page;
+- the POS delivers at least once, so the same sale can arrive twice;
+- the POS fails (503, timeouts) in the middle of a page;
 - a sale can ask for more than the shelf holds, or for an item the stock system has never heard of;
 - weeks later nobody can say whether the two systems still agree.
 
@@ -125,8 +125,6 @@ Measured by CI on the pull request (run 39811222891): **36 xUnit tests passed, 0
 
 ## Limitations
 
-Honest list; none of these is hidden by the tests.
-
 - **Sales only.** There are no returns, voids, receipts or transfers, so `Opening` can only be changed by import. A real integration needs those events.
 - **One store, one worker.** `STORE-01` is hard-coded in the fake; the cursor is global. Several workers would be safe for correctness (idempotency, `UPDLOCK`) but would duplicate reads.
 - **Single-threaded booking.** One sale per transaction, in sequence order. Throughput is bounded by one round trip per sale.
@@ -142,7 +140,7 @@ See the open issues: schema migrations with a versioned history, returns and voi
 
 ## Português (resumo)
 
-Integração **PDV → estoque** em C#/.NET 10 e SQL Server pela **DCtech.**: um worker lê vendas de um PDV **fictício**, baixa o estoque **uma única vez** (a chave primária do id da venda garante a idempotência na mesma transação), nunca deixa o saldo negativo (a diferença vira *shortfall* registrado), repete falhas transitórias com backoff e, no fim, **reconcilia** os totais do PDV com o que foi lançado. Scripts PowerShell (importar/exportar estoque e health check) têm testes Pester. Tudo é dado sintético; `docker compose up` sobe o conjunto.
+Integração PDV → estoque em C#/.NET 10 e SQL Server pela DCtech.: um worker lê vendas de um PDV **fictício**, baixa o estoque uma única vez (a chave primária do id da venda garante a idempotência na mesma transação), nunca deixa o saldo negativo (a diferença vira *shortfall* registrado), repete falhas transitórias com backoff e, no fim, reconcilia os totais do PDV com o que foi lançado. Scripts PowerShell (importar/exportar estoque e health check) têm testes Pester. Tudo é dado sintético; `docker compose up` sobe o conjunto.
 
 ## Sources
 
