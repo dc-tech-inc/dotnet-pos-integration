@@ -14,7 +14,7 @@ COPY --from=build /out/worker ./
 USER $APP_UID
 ENTRYPOINT ["dotnet", "PosIntegration.Worker.dll"]
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS fakepos
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS fakepos
 WORKDIR /app
 COPY --from=build /out/fakepos ./
 ENV ASPNETCORE_URLS=http://+:5080
