@@ -1,5 +1,5 @@
 # Two runnable targets from one build: `worker` (the integration) and `fakepos` (the fictional POS API).
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY Directory.Build.props .editorconfig PosIntegration.sln global.json ./
 COPY src ./src
