@@ -8,7 +8,7 @@ RUN dotnet restore src/PosIntegration.Worker && dotnet restore src/PosIntegratio
 RUN dotnet publish src/PosIntegration.Worker -c Release --no-restore -o /out/worker \
  && dotnet publish src/PosIntegration.FakePos -c Release --no-restore -o /out/fakepos
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS worker
+FROM mcr.microsoft.com/dotnet/runtime:11.0 AS worker
 WORKDIR /app
 COPY --from=build /out/worker ./
 USER $APP_UID
